@@ -44,28 +44,24 @@ logger = setup_logging()
 class Certificate:
     arn: str
     not_after: Optional[datetime] = None
-    aws_account_id: Optional[str] = None
-    aws_region: Optional[str] = None
-    aws_service: Optional[str] = None
-    environment: Optional[str] = None
-    business_application_name: Optional[str] = None
-    asv_name: Optional[str] = None
-    line_of_business: Optional[str] = None
+    all_fields: Dict[str, str] = field(default_factory=dict)
     all_configs: Dict[str, str] = field(default_factory=dict)
     
     @classmethod
     def from_api_resource(cls, resource: Dict[str, Any]) -> 'Certificate':
         arn = normalize_arn(resource.get('amazonResourceName', ''))
         not_after = None
+        all_fields = {}
         all_configs = {}
         
-        aws_account_id = resource.get('awsAccountId')
-        aws_region = resource.get('awsRegion')
-        aws_service = resource.get('awsService')
-        environment = resource.get('environment')
-        business_application_name = resource.get('businessApplicationName')
-        asv_name = resource.get('asvName')
-        line_of_business = resource.get('lineOfBusiness')
+        # Extract ALL top-level fields from the API response
+        for key, value in resource.items():
+            if key not in ['configurationItems', 'supplementaryConfiguration'] and value is not None:
+                # Convert value to string, handling different types
+                if isinstance(value, (dict, list)):
+                    all_fields[key] = str(value)
+                else:
+                    all_fields[key] = str(value)
         
         # Extract ALL configuration items
         for item in resource.get("configurationItems", []):
@@ -76,7 +72,7 @@ class Certificate:
                 # Clean the config name and value
                 clean_name = config_name.replace("configuration.", "")
                 clean_value = config_value.strip('"')
-                all_configs[clean_name] = clean_value
+                all_configs[f"config_{clean_name}"] = clean_value
                 
                 # Special handling for notAfter to parse as datetime
                 if clean_name == "notAfter":
@@ -110,18 +106,12 @@ class Certificate:
                         logger.debug(f"Could not parse tags for ARN {arn}")
                 else:
                     # Store other supplementary config items directly
-                    all_configs[supp_name] = supp_value.strip('"')
+                    all_configs[f"supp_{supp_name}"] = supp_value.strip('"')
         
         return cls(
             arn=arn,
             not_after=not_after,
-            aws_account_id=aws_account_id,
-            aws_region=aws_region,
-            aws_service=aws_service,
-            environment=environment,
-            business_application_name=business_application_name,
-            asv_name=asv_name,
-            line_of_business=line_of_business,
+            all_fields=all_fields,
             all_configs=all_configs
         )
 
@@ -317,24 +307,23 @@ def analyze_certificate_configurations(certificates: List[Certificate]) -> pd.Da
     if not certificates:
         return pd.DataFrame(columns=['Configuration Field', 'Value', 'Count', 'Percentage'])
     
-    # Collect all unique configuration field names across all certificates
+    # Collect all unique field names across all certificates
     all_field_names = set()
-    for cert in certificates:
-        all_field_names.update(cert.all_configs.keys())
+    all_config_names = set()
     
-    # Add top-level fields that might be useful
-    top_level_fields = ['aws_region', 'environment', 'business_application_name', 'asv_name', 'line_of_business']
+    for cert in certificates:
+        all_field_names.update(cert.all_fields.keys())
+        all_config_names.update(cert.all_configs.keys())
     
     analysis_data = {}
     
-    # Add dynamic configuration fields
+    # Add ALL top-level resource fields
     for field_name in sorted(all_field_names):
-        analysis_data[field_name] = [cert.all_configs.get(field_name, "Not Found") for cert in certificates]
+        analysis_data[field_name] = [cert.all_fields.get(field_name, "Not Found") for cert in certificates]
     
-    # Add top-level resource fields
-    for field_name in top_level_fields:
-        if hasattr(certificates[0], field_name):
-            analysis_data[field_name] = [getattr(cert, field_name, None) or "Not Found" for cert in certificates]
+    # Add ALL configuration and supplementary configuration fields
+    for config_name in sorted(all_config_names):
+        analysis_data[config_name] = [cert.all_configs.get(config_name, "Not Found") for cert in certificates]
     
     summary_list = []
     total_count = len(certificates)
