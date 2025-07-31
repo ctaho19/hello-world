@@ -18,7 +18,7 @@ import snowflake.connector
 import yaml
 from dateutil.parser import parse
 
-warnings.filterwarnings("ignore", InsecureRequestWarning)
+warnings.filterwarnings("ignore", category=InsecureRequestWarning)
 
 DEFAULT_API_BATCH_SIZE = 10000
 SAFETY_LIMIT = 50000
@@ -26,7 +26,7 @@ SNOWFLAKE_QUERY = """
     SELECT DISTINCT CERTIFICATE_ARN
     FROM CYBR_DB.PHDP_CYBR.CERTIFICATE_CATALOG_CERTIFICATE_USAGE
     WHERE CERTIFICATE_ARN LIKE '%arn:aws:acm:%' 
-    AND NOT_VALID_AFTER_UTC_TIMESTAP >= CURRENT_TIMESTAMP
+    AND NOT_VALID_AFTER_UTC_TIMESTAMP >= CURRENT_TIMESTAMP
 """
 
 def setup_logging(verbose: bool = False) -> logging.Logger:
@@ -278,11 +278,11 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
             page_count += 1
             logger.debug(f"Fetching page {page_count}...")
             
-            api_url = base_api_url
+            current_payload = api_payload.copy()
             if next_record_key:
-                api_url = f"{base_api_url}?nextRecordKey={next_record_key}"
+                current_payload['nextRecordKey'] = next_record_key
 
-            response = session.post(api_url, json=api_payload)
+            response = session.post(base_api_url, json=current_payload)
             response.raise_for_status()
             data = response.json()
             
@@ -310,6 +310,8 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
             if not next_record_key:
                 logger.info(f"API stream complete: {total_processed} certificates processed")
                 break
+            else:
+                logger.debug(f"Next record key: {next_record_key[:50]}..." if len(next_record_key) > 50 else next_record_key)
             
             if total_processed >= SAFETY_LIMIT:
                 logger.warning(f"Stopping at {total_processed} certificates (safety limit)")
