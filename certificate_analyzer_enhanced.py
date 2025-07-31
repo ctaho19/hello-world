@@ -64,6 +64,16 @@ class Certificate:
     asv_tag: Optional[str] = None
     ba_tag: Optional[str] = None
     not_after: Optional[datetime] = None
+    # Additional fields from API response that may impact rotation
+    aws_account_id: Optional[str] = None
+    aws_region: Optional[str] = None
+    aws_service: Optional[str] = None
+    environment: Optional[str] = None
+    business_application_name: Optional[str] = None
+    asv_name: Optional[str] = None
+    line_of_business: Optional[str] = None
+    domain_name: Optional[str] = None
+    in_use: Optional[str] = None
     
     @classmethod
     def from_api_resource(cls, resource: Dict[str, Any]) -> 'Certificate':
@@ -75,6 +85,17 @@ class Certificate:
         asv_tag = None
         ba_tag = None
         not_after = None
+        
+        # Additional fields
+        aws_account_id = resource.get('awsAccountId')
+        aws_region = resource.get('awsRegion')
+        aws_service = resource.get('awsService')
+        environment = resource.get('environment')
+        business_application_name = resource.get('businessApplicationName')
+        asv_name = resource.get('asvName')
+        line_of_business = resource.get('lineOfBusiness')
+        domain_name = None
+        in_use = None
         
         # Extract configuration items
         for item in resource.get("configurationItems", []):
@@ -92,6 +113,10 @@ class Certificate:
                     not_after = parse(config_value.strip('"'))
                 except (ValueError, TypeError) as e:
                     logger.warning(f"Could not parse notAfter '{config_value}' for ARN {arn}: {e}")
+            elif config_name == "configuration.domainName":
+                domain_name = config_value.strip('"')
+            elif config_name == "configuration.inUse":
+                in_use = config_value.strip('"')
         
         # Extract tags from supplementary configuration
         supp_config = resource.get("supplementaryConfiguration", [])
@@ -120,7 +145,16 @@ class Certificate:
             renewal_status=renewal_status,
             asv_tag=asv_tag,
             ba_tag=ba_tag,
-            not_after=not_after
+            not_after=not_after,
+            aws_account_id=aws_account_id,
+            aws_region=aws_region,
+            aws_service=aws_service,
+            environment=environment,
+            business_application_name=business_application_name,
+            asv_name=asv_name,
+            line_of_business=line_of_business,
+            domain_name=domain_name,
+            in_use=in_use
         )
 
 @dataclass
@@ -236,7 +270,7 @@ def get_dataset_arns(conn: snowflake.connector.SnowflakeConnection) -> Set[str]:
 def stream_api_certificates(api_settings: Dict, auth_token: str, 
                           batch_size: int = DEFAULT_API_BATCH_SIZE) -> Iterator[Certificate]:
     """Stream certificates from API with memory-efficient processing."""
-    api_url = f"{api_settings['onestream_host']}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
+    base_api_url = f"{api_settings['onestream_host']}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
     next_record_key = None
     
     if not auth_token:
@@ -274,11 +308,12 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
             page_count += 1
             logger.debug(f"Fetching page {page_count}...")
             
-            current_payload = api_payload.copy()
+            # Build URL with nextRecordKey as parameter for proper pagination
+            api_url = base_api_url
             if next_record_key:
-                current_payload['nextRecordKey'] = next_record_key
+                api_url = f"{base_api_url}?nextRecordKey={next_record_key}"
 
-            response = session.post(api_url, json=current_payload)
+            response = session.post(api_url, json=api_payload)
             response.raise_for_status()
             data = response.json()
             
@@ -331,7 +366,13 @@ def analyze_certificate_configurations(certificates: List[Certificate]) -> pd.Da
         'cert_type': [cert.cert_type for cert in certificates],
         'renewal_status': [cert.renewal_status for cert in certificates],
         'asv_tag': [cert.asv_tag or "Not Found" for cert in certificates],
-        'ba_tag': [cert.ba_tag or "Not Found" for cert in certificates]
+        'ba_tag': [cert.ba_tag or "Not Found" for cert in certificates],
+        'aws_region': [cert.aws_region or "Not Found" for cert in certificates],
+        'environment': [cert.environment or "Not Found" for cert in certificates],
+        'business_application_name': [cert.business_application_name or "Not Found" for cert in certificates],
+        'asv_name': [cert.asv_name or "Not Found" for cert in certificates],
+        'line_of_business': [cert.line_of_business or "Not Found" for cert in certificates],
+        'in_use': [cert.in_use or "Not Found" for cert in certificates]
     }
     
     summary_list = []
