@@ -240,7 +240,7 @@ def get_dataset_arns(conn: snowflake.connector.SnowflakeConnection) -> Set[str]:
 
 def stream_api_certificates(api_settings: Dict, auth_token: str, 
                           batch_size: int = DEFAULT_API_BATCH_SIZE) -> Iterator[Certificate]:
-    base_api_url = f"{api_settings['onestream_host']}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
+    api_url = f"{api_settings['onestream_host']}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
     next_record_key = None
     
     if not auth_token:
@@ -278,11 +278,11 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
             page_count += 1
             logger.debug(f"Fetching page {page_count}...")
             
-            current_payload = api_payload.copy()
+            params = {'limit': batch_size}
             if next_record_key:
-                current_payload['nextRecordKey'] = next_record_key
+                params['nextRecordKey'] = next_record_key
 
-            response = session.post(base_api_url, json=current_payload)
+            response = session.post(api_url, headers=session.headers, json=api_payload, params=params)
             response.raise_for_status()
             data = response.json()
             
