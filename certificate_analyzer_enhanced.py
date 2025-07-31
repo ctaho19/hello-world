@@ -1,14 +1,4 @@
 #!/usr/bin/env python3
-"""
-Certificate Rotation Analysis Tool
-
-Analyzes discrepancies between certificates returned by the API (source of truth)
-and those returned by a dataset query to identify rotation qualification criteria.
-
-The API returns ~29,000 certificates with "issued" status, while the dataset
-contains only ~5,000 distinct, non-expired, actively rotating certificates.
-This tool helps diagnose what qualifies certificates for inclusion in the rotation set.
-"""
 
 import argparse
 import json
@@ -28,10 +18,8 @@ import snowflake.connector
 import yaml
 from dateutil.parser import parse
 
-# Suppress SSL warnings for internal APIs
 warnings.filterwarnings("ignore", InsecureRequestWarning)
 
-# Constants
 DEFAULT_API_BATCH_SIZE = 10000
 SAFETY_LIMIT = 50000
 SNOWFLAKE_QUERY = """
@@ -41,9 +29,7 @@ SNOWFLAKE_QUERY = """
     AND NOT_VALID_AFTER_UTC_TIMESTAP >= CURRENT_TIMESTAMP
 """
 
-# Configure logging
 def setup_logging(verbose: bool = False) -> logging.Logger:
-    """Configure logging with appropriate level and format."""
     level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(
         level=level,
@@ -56,7 +42,6 @@ logger = setup_logging()
 
 @dataclass(frozen=True, slots=True)
 class Certificate:
-    """Immutable certificate representation with core rotation-relevant fields."""
     arn: str
     renewal_eligibility: str
     cert_type: str
@@ -64,7 +49,6 @@ class Certificate:
     asv_tag: Optional[str] = None
     ba_tag: Optional[str] = None
     not_after: Optional[datetime] = None
-    # Additional fields from API response that may impact rotation
     aws_account_id: Optional[str] = None
     aws_region: Optional[str] = None
     aws_service: Optional[str] = None
@@ -77,7 +61,6 @@ class Certificate:
     
     @classmethod
     def from_api_resource(cls, resource: Dict[str, Any]) -> 'Certificate':
-        """Create Certificate from API resource configuration."""
         arn = normalize_arn(resource.get('amazonResourceName', ''))
         renewal_eligibility = "UNKNOWN"
         cert_type = "UNKNOWN"
@@ -86,7 +69,6 @@ class Certificate:
         ba_tag = None
         not_after = None
         
-        # Additional fields
         aws_account_id = resource.get('awsAccountId')
         aws_region = resource.get('awsRegion')
         aws_service = resource.get('awsService')
@@ -97,7 +79,6 @@ class Certificate:
         domain_name = None
         in_use = None
         
-        # Extract configuration items
         for item in resource.get("configurationItems", []):
             config_name = item.get("configurationName", "")
             config_value = item.get("configurationValue", "")
@@ -118,9 +99,7 @@ class Certificate:
             elif config_name == "configuration.inUse":
                 in_use = config_value.strip('"')
         
-        # Extract tags from supplementary configuration
         supp_config = resource.get("supplementaryConfiguration", [])
-        # Handle both list and dict formats
         if isinstance(supp_config, dict):
             supp_config = [supp_config]
             
@@ -159,7 +138,6 @@ class Certificate:
 
 @dataclass
 class AnalysisResult:
-    """Results of certificate rotation analysis."""
     total_api_certificates: int
     total_dataset_certificates: int
     matching_certificates: int
@@ -171,16 +149,13 @@ class AnalysisResult:
     insights: Dict[str, Any] = field(default_factory=dict)
 
 def normalize_arn(arn: str) -> str:
-    """Normalize ARN by stripping quotes and whitespace for consistent comparison."""
     return arn.strip('"').strip() if arn else ""
 
 def load_env_config(env_name: str) -> Tuple[Dict, Dict]:
-    """Load environment configuration from YAML files with error handling."""
     script_dir = Path(__file__).parent
     config = {}
 
     def deep_merge(source, destination):
-        """Merge nested dictionaries."""
         for key, value in source.items():
             if isinstance(value, dict) and key in destination and isinstance(destination[key], dict):
                 deep_merge(value, destination[key])
@@ -223,9 +198,7 @@ def load_env_config(env_name: str) -> Tuple[Dict, Dict]:
         raise
 
 def get_snowflake_connection(snf_settings: Dict, snf_secrets: Dict) -> snowflake.connector.SnowflakeConnection:
-    """Establish connection to Snowflake with error handling."""
     try:
-        # Handle nested credential structure flexibly
         creds = snf_secrets.get('values', snf_secrets)
         if 'snowflake_credentials' in snf_secrets:
             creds = snf_secrets['snowflake_credentials'].get('values', snf_secrets['snowflake_credentials'])
@@ -253,12 +226,10 @@ def get_snowflake_connection(snf_settings: Dict, snf_secrets: Dict) -> snowflake
         raise
 
 def get_dataset_arns(conn: snowflake.connector.SnowflakeConnection) -> Set[str]:
-    """Fetch certificate ARNs from Snowflake dataset with error handling."""
     try:
         logger.info("Fetching certificate ARNs from Snowflake dataset...")
         with conn.cursor() as cursor:
             cursor.execute(SNOWFLAKE_QUERY)
-            # Use pandas for better performance with large result sets
             df = cursor.fetch_pandas_all()
             arns = {normalize_arn(arn) for arn in df['CERTIFICATE_ARN'] if arn}
             logger.info(f"Found {len(arns)} certificate ARNs in dataset")
@@ -269,7 +240,6 @@ def get_dataset_arns(conn: snowflake.connector.SnowflakeConnection) -> Set[str]:
 
 def stream_api_certificates(api_settings: Dict, auth_token: str, 
                           batch_size: int = DEFAULT_API_BATCH_SIZE) -> Iterator[Certificate]:
-    """Stream certificates from API with memory-efficient processing."""
     base_api_url = f"{api_settings['onestream_host']}/internal-operations/cloud-service/aws-tooling/search-resource-configurations"
     next_record_key = None
     
@@ -308,7 +278,6 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
             page_count += 1
             logger.debug(f"Fetching page {page_count}...")
             
-            # Build URL with nextRecordKey as parameter for proper pagination
             api_url = base_api_url
             if next_record_key:
                 api_url = f"{base_api_url}?nextRecordKey={next_record_key}"
@@ -325,12 +294,10 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
                 try:
                     cert = Certificate.from_api_resource(resource)
                     
-                    # Filter out expired certificates at API level if possible
                     if cert.not_after and cert.not_after > now_utc:
                         yield cert
                         page_valid_count += 1
                     elif not cert.not_after:
-                        # Include certificates where we couldn't parse the date
                         yield cert
                         page_valid_count += 1
                         
@@ -344,7 +311,6 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
                 logger.info(f"API stream complete: {total_processed} certificates processed")
                 break
             
-            # Safety limit to prevent runaway queries
             if total_processed >= SAFETY_LIMIT:
                 logger.warning(f"Stopping at {total_processed} certificates (safety limit)")
                 break
@@ -357,7 +323,6 @@ def stream_api_certificates(api_settings: Dict, auth_token: str,
         raise
 
 def analyze_certificate_configurations(certificates: List[Certificate]) -> pd.DataFrame:
-    """Analyze certificate configurations and return summary statistics."""
     if not certificates:
         return pd.DataFrame(columns=['Configuration Field', 'Value', 'Count', 'Percentage'])
     
@@ -393,14 +358,12 @@ def analyze_certificate_configurations(certificates: List[Certificate]) -> pd.Da
 
 def create_comparative_analysis(rotating_configs: List[Certificate], 
                               non_rotating_configs: List[Certificate]) -> pd.DataFrame:
-    """Create side-by-side comparison of rotating vs non-rotating certificate configurations."""
     
     rotating_summary = analyze_certificate_configurations(rotating_configs)
     non_rotating_summary = analyze_certificate_configurations(non_rotating_configs)
     
     comparison_data = []
     
-    # Get all unique configuration fields
     all_fields = set()
     if not rotating_summary.empty:
         all_fields.update(rotating_summary['Configuration Field'].unique())
@@ -408,11 +371,9 @@ def create_comparative_analysis(rotating_configs: List[Certificate],
         all_fields.update(non_rotating_summary['Configuration Field'].unique())
     
     for field in sorted(all_fields):
-        # Get values for this field from both groups
         rotating_field_data = rotating_summary[rotating_summary['Configuration Field'] == field] if not rotating_summary.empty else pd.DataFrame()
         non_rotating_field_data = non_rotating_summary[non_rotating_summary['Configuration Field'] == field] if not non_rotating_summary.empty else pd.DataFrame()
         
-        # Get all unique values for this field
         all_values = set()
         if not rotating_field_data.empty:
             all_values.update(rotating_field_data['Value'].unique())
@@ -433,7 +394,6 @@ def create_comparative_analysis(rotating_configs: List[Certificate],
                 if not non_rotating_match.empty:
                     non_rotating_count = non_rotating_match['Count'].iloc[0]
             
-            # Calculate percentages safely
             total_rotating = len(rotating_configs)
             total_non_rotating = len(non_rotating_configs)
             
@@ -453,7 +413,6 @@ def create_comparative_analysis(rotating_configs: List[Certificate],
     return pd.DataFrame(comparison_data)
 
 def diagnose_arn_mismatches(dataset_arns: Set[str], api_arns: Set[str]) -> Dict[str, Any]:
-    """Diagnose why there are so few ARN matches between dataset and API."""
     missing_in_api = dataset_arns - api_arns
     missing_in_dataset = api_arns - dataset_arns
     
@@ -478,28 +437,23 @@ def diagnose_arn_mismatches(dataset_arns: Set[str], api_arns: Set[str]) -> Dict[
     return diagnosis
 
 def generate_rotation_insights(comparison_df: pd.DataFrame, analysis_result: AnalysisResult) -> Dict[str, Any]:
-    """Generate insights about what qualifies certificates for rotation."""
     insights = {}
     
     if comparison_df.empty:
         return insights
     
-    # Convert difference column to numeric for analysis
     comparison_df['Diff_Numeric'] = comparison_df['Difference'].str.replace('%', '').astype(float)
     
-    # Find significant differences (> 10% difference)
     significant_diffs = comparison_df[abs(comparison_df['Diff_Numeric']) > 10].sort_values('Diff_Numeric', ascending=False)
     
     insights['significant_differences'] = significant_diffs.to_dict('records') if not significant_diffs.empty else []
     
-    # Identify strong rotation predictors
     strong_predictors = comparison_df[comparison_df['Diff_Numeric'] > 20]
     rotation_blockers = comparison_df[comparison_df['Diff_Numeric'] < -20]
     
     insights['rotation_predictors'] = strong_predictors.to_dict('records') if not strong_predictors.empty else []
     insights['rotation_blockers'] = rotation_blockers.to_dict('records') if not rotation_blockers.empty else []
     
-    # Calculate rotation rate
     total_certs = analysis_result.total_api_certificates
     rotating_certs = analysis_result.matching_certificates
     insights['rotation_rate'] = (rotating_certs / total_certs * 100) if total_certs > 0 else 0
@@ -507,7 +461,6 @@ def generate_rotation_insights(comparison_df: pd.DataFrame, analysis_result: Ana
     return insights
 
 def print_analysis_summary(result: AnalysisResult) -> None:
-    """Print comprehensive analysis summary."""
     print(f"\n{'='*80}")
     print("CERTIFICATE ROTATION ANALYSIS SUMMARY")
     print(f"{'='*80}")
@@ -521,13 +474,12 @@ def print_analysis_summary(result: AnalysisResult) -> None:
     if result.dataset_only_arns:
         print(f"  • Dataset-only ARNs: {len(result.dataset_only_arns):,}")
     
-    # Print rotation insights
     insights = result.insights
     if insights.get('significant_differences'):
         print(f"\nSIGNIFICANT CONFIGURATION DIFFERENCES (>10%):")
         print(f"{'Field':<20} {'Value':<25} {'Rotating %':<12} {'Non-Rot %':<12} {'Difference':<12}")
         print("-" * 85)
-        for diff in insights['significant_differences'][:10]:  # Limit to top 10
+        for diff in insights['significant_differences'][:10]:
             print(f"{diff['Configuration Field']:<20} {diff['Value']:<25} {diff['Rotating %']:<12} {diff['Non-Rotating %']:<12} {diff['Difference']:<12}")
     
     if insights.get('rotation_predictors'):
@@ -541,14 +493,11 @@ def print_analysis_summary(result: AnalysisResult) -> None:
             print(f"  • {blocker['Configuration Field']} = '{blocker['Value']}' ({blocker['Difference']} difference)")
 
 def save_analysis_results(result: AnalysisResult, output_dir: Path) -> None:
-    """Save analysis results to CSV files."""
     output_dir.mkdir(exist_ok=True)
     
-    # Save comparison analysis
     comparison_csv = output_dir / "certificate_comparison_analysis.csv"
     result.comparison_df.to_csv(comparison_csv, index=False)
     
-    # Save detailed breakdowns
     rotating_summary = analyze_certificate_configurations(result.rotating_configs)
     non_rotating_summary = analyze_certificate_configurations(result.non_rotating_configs)
     
@@ -558,7 +507,6 @@ def save_analysis_results(result: AnalysisResult, output_dir: Path) -> None:
     rotating_summary.to_csv(rotating_csv, index=False)
     non_rotating_summary.to_csv(non_rotating_csv, index=False)
     
-    # Save insights as JSON
     insights_json = output_dir / "rotation_insights.json"
     with open(insights_json, 'w') as f:
         json.dump(result.insights, f, indent=2, default=str)
@@ -570,11 +518,8 @@ def save_analysis_results(result: AnalysisResult, output_dir: Path) -> None:
     logger.info(f"  • Insights: {insights_json}")
 
 def main():
-    """Main execution function."""
     parser = argparse.ArgumentParser(
-        description="Analyze certificate rotation discrepancies between API and dataset",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        description="Analyze certificate rotation discrepancies between API and dataset"
     )
     parser.add_argument("--env", type=str, required=True, 
                        help="Environment to use from configuration files")
@@ -589,42 +534,33 @@ def main():
     
     args = parser.parse_args()
     
-    # Setup logging with appropriate level
     global logger
     logger = setup_logging(args.verbose)
     
     try:
         logger.info(f"Starting certificate rotation analysis for environment: {args.env}")
         
-        # Load environment configuration
         env_settings, env_secrets = load_env_config(args.env)
         
-        # Get authentication token
         auth_token = args.token or ""
         if not auth_token:
             logger.warning("No authentication token provided. API calls may fail.")
         
-        # Connect to Snowflake and fetch dataset ARNs
         snf_conn = get_snowflake_connection(env_settings, env_secrets)
         dataset_arns = get_dataset_arns(snf_conn)
         snf_conn.close()
         
-        # Stream API certificates and categorize them
         logger.info("Streaming API certificate configurations...")
         api_certificates = list(stream_api_certificates(env_settings, auth_token, args.batch_size))
         api_arns = {cert.arn for cert in api_certificates if cert.arn}
         
-        # Diagnose ARN matching issues
         arn_diagnosis = diagnose_arn_mismatches(dataset_arns, api_arns)
         
-        # Categorize certificates
         rotating_configs = [cert for cert in api_certificates if cert.arn in dataset_arns]
         non_rotating_configs = [cert for cert in api_certificates if cert.arn not in dataset_arns]
         
-        # Create comparative analysis
         comparison_df = create_comparative_analysis(rotating_configs, non_rotating_configs)
         
-        # Generate insights
         analysis_result = AnalysisResult(
             total_api_certificates=len(api_certificates),
             total_dataset_certificates=len(dataset_arns),
@@ -639,22 +575,18 @@ def main():
         analysis_result.insights = generate_rotation_insights(comparison_df, analysis_result)
         analysis_result.insights['arn_diagnosis'] = arn_diagnosis
         
-        # Print results
         print_analysis_summary(analysis_result)
         
-        # Display detailed comparison if not too large
         if not comparison_df.empty and len(comparison_df) <= 50:
             print(f"\n{'='*80}")
             print("DETAILED CONFIGURATION COMPARISON")
             print(f"{'='*80}")
             print(comparison_df.to_string(index=False))
         
-        # Save results
         save_analysis_results(analysis_result, args.output_dir)
         
         logger.info("Certificate rotation analysis completed successfully")
         
-        # Return appropriate exit code
         if analysis_result.matching_certificates < 100:
             logger.warning("Very low certificate match count detected")
             return 2
