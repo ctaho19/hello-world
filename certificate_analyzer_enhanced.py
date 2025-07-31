@@ -40,14 +40,9 @@ def setup_logging(verbose: bool = False) -> logging.Logger:
 
 logger = setup_logging()
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=False)
 class Certificate:
     arn: str
-    renewal_eligibility: str
-    cert_type: str
-    renewal_status: str = "UNKNOWN"
-    asv_tag: Optional[str] = None
-    ba_tag: Optional[str] = None
     not_after: Optional[datetime] = None
     aws_account_id: Optional[str] = None
     aws_region: Optional[str] = None
@@ -56,18 +51,13 @@ class Certificate:
     business_application_name: Optional[str] = None
     asv_name: Optional[str] = None
     line_of_business: Optional[str] = None
-    domain_name: Optional[str] = None
-    in_use: Optional[str] = None
+    all_configs: Dict[str, str] = field(default_factory=dict)
     
     @classmethod
     def from_api_resource(cls, resource: Dict[str, Any]) -> 'Certificate':
         arn = normalize_arn(resource.get('amazonResourceName', ''))
-        renewal_eligibility = "UNKNOWN"
-        cert_type = "UNKNOWN"
-        renewal_status = "UNKNOWN"
-        asv_tag = None
-        ba_tag = None
         not_after = None
+        all_configs = {}
         
         aws_account_id = resource.get('awsAccountId')
         aws_region = resource.get('awsRegion')
@@ -76,54 +66,54 @@ class Certificate:
         business_application_name = resource.get('businessApplicationName')
         asv_name = resource.get('asvName')
         line_of_business = resource.get('lineOfBusiness')
-        domain_name = None
-        in_use = None
         
+        # Extract ALL configuration items
         for item in resource.get("configurationItems", []):
             config_name = item.get("configurationName", "")
             config_value = item.get("configurationValue", "")
             
-            if config_name == "configuration.renewalEligibility":
-                renewal_eligibility = config_value.strip('"')
-            elif config_name == "configuration.type":
-                cert_type = config_value.strip('"')
-            elif config_name == "configuration.renewalStatus":
-                renewal_status = config_value.strip('"')
-            elif config_name == "configuration.notAfter":
-                try:
-                    not_after = parse(config_value.strip('"'))
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Could not parse notAfter '{config_value}' for ARN {arn}: {e}")
-            elif config_name == "configuration.domainName":
-                domain_name = config_value.strip('"')
-            elif config_name == "configuration.inUse":
-                in_use = config_value.strip('"')
+            if config_name and config_value:
+                # Clean the config name and value
+                clean_name = config_name.replace("configuration.", "")
+                clean_value = config_value.strip('"')
+                all_configs[clean_name] = clean_value
+                
+                # Special handling for notAfter to parse as datetime
+                if clean_name == "notAfter":
+                    try:
+                        not_after = parse(clean_value)
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Could not parse notAfter '{clean_value}' for ARN {arn}: {e}")
         
+        # Extract ALL supplementary configuration items
         supp_config = resource.get("supplementaryConfiguration", [])
         if isinstance(supp_config, dict):
             supp_config = [supp_config]
             
         for item in supp_config:
-            if item.get("supplementaryConfigurationName") == "Tags":
-                try:
-                    tags_str = item.get("supplementaryConfigurationValue", "").strip('"')
-                    if tags_str:
-                        tags = json.loads(tags_str)
-                        for tag in tags:
-                            if tag.get('key') == 'ASV':
-                                asv_tag = tag.get('value')
-                            elif tag.get('key') == 'BA':
-                                ba_tag = tag.get('value')
-                except (json.JSONDecodeError, AttributeError, TypeError):
-                    logger.debug(f"Could not parse tags for ARN {arn}")
+            supp_name = item.get("supplementaryConfigurationName", "")
+            supp_value = item.get("supplementaryConfigurationValue", "")
+            
+            if supp_name and supp_value:
+                if supp_name == "Tags":
+                    # Special handling for tags - extract individual tag values
+                    try:
+                        tags_str = supp_value.strip('"')
+                        if tags_str:
+                            tags = json.loads(tags_str)
+                            for tag in tags:
+                                tag_key = tag.get('key', '')
+                                tag_value = tag.get('value', '')
+                                if tag_key:
+                                    all_configs[f"tag_{tag_key}"] = tag_value
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        logger.debug(f"Could not parse tags for ARN {arn}")
+                else:
+                    # Store other supplementary config items directly
+                    all_configs[supp_name] = supp_value.strip('"')
         
         return cls(
             arn=arn,
-            renewal_eligibility=renewal_eligibility,
-            cert_type=cert_type,
-            renewal_status=renewal_status,
-            asv_tag=asv_tag,
-            ba_tag=ba_tag,
             not_after=not_after,
             aws_account_id=aws_account_id,
             aws_region=aws_region,
@@ -132,8 +122,7 @@ class Certificate:
             business_application_name=business_application_name,
             asv_name=asv_name,
             line_of_business=line_of_business,
-            domain_name=domain_name,
-            in_use=in_use
+            all_configs=all_configs
         )
 
 @dataclass
@@ -328,19 +317,24 @@ def analyze_certificate_configurations(certificates: List[Certificate]) -> pd.Da
     if not certificates:
         return pd.DataFrame(columns=['Configuration Field', 'Value', 'Count', 'Percentage'])
     
-    analysis_data = {
-        'renewal_eligibility': [cert.renewal_eligibility for cert in certificates],
-        'cert_type': [cert.cert_type for cert in certificates],
-        'renewal_status': [cert.renewal_status for cert in certificates],
-        'asv_tag': [cert.asv_tag or "Not Found" for cert in certificates],
-        'ba_tag': [cert.ba_tag or "Not Found" for cert in certificates],
-        'aws_region': [cert.aws_region or "Not Found" for cert in certificates],
-        'environment': [cert.environment or "Not Found" for cert in certificates],
-        'business_application_name': [cert.business_application_name or "Not Found" for cert in certificates],
-        'asv_name': [cert.asv_name or "Not Found" for cert in certificates],
-        'line_of_business': [cert.line_of_business or "Not Found" for cert in certificates],
-        'in_use': [cert.in_use or "Not Found" for cert in certificates]
-    }
+    # Collect all unique configuration field names across all certificates
+    all_field_names = set()
+    for cert in certificates:
+        all_field_names.update(cert.all_configs.keys())
+    
+    # Add top-level fields that might be useful
+    top_level_fields = ['aws_region', 'environment', 'business_application_name', 'asv_name', 'line_of_business']
+    
+    analysis_data = {}
+    
+    # Add dynamic configuration fields
+    for field_name in sorted(all_field_names):
+        analysis_data[field_name] = [cert.all_configs.get(field_name, "Not Found") for cert in certificates]
+    
+    # Add top-level resource fields
+    for field_name in top_level_fields:
+        if hasattr(certificates[0], field_name):
+            analysis_data[field_name] = [getattr(cert, field_name, None) or "Not Found" for cert in certificates]
     
     summary_list = []
     total_count = len(certificates)
