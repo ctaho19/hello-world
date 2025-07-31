@@ -200,8 +200,8 @@ def load_env_config(env_name: str) -> Tuple[Dict, Dict]:
 def get_snowflake_connection(snf_settings: Dict, snf_secrets: Dict) -> snowflake.connector.SnowflakeConnection:
     try:
         creds = snf_secrets.get('values', snf_secrets)
-        if 'snowflake_credentials' in snf_secrets:
-            creds = snf_secrets['snowflake_credentials'].get('values', snf_secrets['snowflake_credentials'])
+        if 'snowflake' in snf_secrets:
+            creds = snf_secrets['snowflake'].get('values', snf_secrets['snowflake'])
             
         if not creds.get('username') or not creds.get('password'):
             raise ValueError("Missing username or password credentials")
