@@ -2,7 +2,7 @@
 # Intercept OpenCode's provider install and use our local bundle instead
 
 # Check if this is the OpenCode provider install command
-if [[ "$1" == "add" && "$2" == "--force" && "$3" == "--extract" && "$6" == "@ai-sdk/openai-compatible@latest" ]]; then
+if [[ "$1" == "add" && "$2" == "--force" && "$4" == "--exact" && "$6" == "@ai-sdk/openai-compatible@latest" ]]; then
   # Ensure our bundled provider is in place
   mkdir -p ~/.cache/opencode/node_modules/@ai-sdk/openai-compatible
   
@@ -26,4 +26,4 @@ PKGJSON
 fi
 
 # For all other commands, use the real bun
-exec /Users/uno201/.bun/bin/bun "$@"
+exec /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode.real "$@"
