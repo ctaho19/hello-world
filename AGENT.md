@@ -26,4 +26,4 @@ PKGJSON
 fi
 
 # For all other commands, use the real bun
-exec /opt/homebrew/bin/bun "$@"
+exec /Users/uno201/.bun/bin/bun "$@"
