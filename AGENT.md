@@ -27,3 +27,9 @@ fi
 
 # For all other commands, use the real bun
 exec /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode.real "$@"
+
+#Run these
+mv /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode.real
+
+# Copy our shim and update it
+cp ~/bin/bun /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode
