@@ -1,11 +1,10 @@
-
-# Create the fake package structure
+# 1. Create the folder structure
 mkdir -p ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible
 
-# Copy your bundle
+# 2. Copy your bundle there
 cp /Users/uno201/opencode/opencode-offline-bundle/github-copilot-provider.bundle.cjs ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible/index.cjs
 
-# Create package.json
+# 3. Create package.json
 cat > ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible/package.json << 'EOF'
 {
   "name": "@ai-sdk/openai-compatible",
@@ -15,11 +14,5 @@ cat > ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible/package.json 
 }
 EOF
 
-# Add to your shell profile for permanent use
-echo 'export NODE_PATH="$HOME/.opencode_overrides/node_modules"' >> ~/.zshrc
-
-# Apply now
-export NODE_PATH="$HOME/.opencode_overrides/node_modules"
-
-# Test
-OPENCODE_DISABLE_DEFAULT_PLUGINS=1 opencode
+# 4. Verify it was created
+ls -la ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible
