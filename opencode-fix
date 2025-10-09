@@ -1,35 +1,25 @@
-# Backup the bundled binary
-sudo mv /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode.real
 
-# Create the shim
-sudo tee /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode > /dev/null << 'EOF'
-#!/bin/bash
+# Create the fake package structure
+mkdir -p ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible
 
-# Intercept the provider install command
-if [[ "$1" == "add" && "$*" == *"@ai-sdk/openai-compatible"* ]]; then
-  # Create the package in cache if not already there
-  mkdir -p ~/.cache/opencode/node_modules/@ai-sdk/openai-compatible
-  
-  if [ ! -f ~/.cache/opencode/node_modules/@ai-sdk/openai-compatible/index.js ]; then
-    cp /Users/uno201/opencode/opencode-offline-bundle/github-copilot-provider.bundle.cjs ~/.cache/opencode/node_modules/@ai-sdk/openai-compatible/index.js
-    
-    cat > ~/.cache/opencode/node_modules/@ai-sdk/openai-compatible/package.json << 'PKGJSON'
+# Copy your bundle
+cp /Users/uno201/opencode/opencode-offline-bundle/github-copilot-provider.bundle.cjs ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible/index.cjs
+
+# Create package.json
+cat > ~/.opencode_overrides/node_modules/@ai-sdk/openai-compatible/package.json << 'EOF'
 {
   "name": "@ai-sdk/openai-compatible",
-  "version": "999.0.0",
-  "main": "index.js",
+  "version": "9999.0.0-local",
+  "main": "index.cjs",
   "type": "commonjs"
 }
-PKGJSON
-  fi
-  
-  echo "Using local bundled provider (offline mode)" >&2
-  exit 0
-fi
-
-# Pass everything else to the real binary
-exec "$(dirname "$0")/opencode.real" "$@"
 EOF
 
-# Make it executable
-sudo chmod +x /opt/homebrew/Cellar/opencode/0.14.3/libexec/lib/node_modules/opencode-ai/node_modules/opencode-darwin-arm64/bin/opencode
+# Add to your shell profile for permanent use
+echo 'export NODE_PATH="$HOME/.opencode_overrides/node_modules"' >> ~/.zshrc
+
+# Apply now
+export NODE_PATH="$HOME/.opencode_overrides/node_modules"
+
+# Test
+OPENCODE_DISABLE_DEFAULT_PLUGINS=1 opencode
